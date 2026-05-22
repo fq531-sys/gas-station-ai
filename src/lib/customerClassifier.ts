@@ -91,24 +91,30 @@ function extractCustomerId(order: Order): string {
 }
 
 // 分类客户
-export function classifyCustomers(customers: Customer[], dataEndDate?: Date): CustomerSegment[] {
+export function classifyCustomers(customers: Customer[], orders: Order[], dataEndDate?: Date): CustomerSegment[] {
   // 计算数据截止日（最后消费时间）
   const cutoffDate = dataEndDate || new Date();
-  const riskCustomerIds = new Set<string>(); // TODO: 需要从风险检测模块获取
+
+  // 计算加油站平均升优惠力度
+  const avgDiscountPerLiter = calculateStationAvgDiscountPerLiter(orders);
+
+  // 计算财务风险客户
+  const financialRiskCustomerIds = detectFinancialRiskCustomers(orders, avgDiscountPerLiter);
 
   let total = customers.length;
   let base = 0;
   let risk = 0;
   let churn = 0;
   let random = 0;
+  let financialRisk = 0;
 
   customers.forEach(c => {
     // 计算距离数据截止日的天数
     const daysFromCutoff = Math.floor((cutoffDate.getTime() - new Date(c.lastOrderDate).getTime()) / (1000 * 60 * 60 * 24));
 
-    if (riskCustomerIds.has(c.customerId)) {
-      risk++;
-      c.customerType = 'risk';
+    if (financialRiskCustomerIds.has(c.customerId)) {
+      financialRisk++;
+      c.customerType = 'financialRisk';
     } else if (c.totalOrders === 1) {
       random++;
       c.customerType = 'random';
@@ -135,11 +141,116 @@ export function classifyCustomers(customers: Customer[], dataEndDate?: Date): Cu
 
   return [
     { type: 'total', name: CUSTOMER_TYPE_CONFIG.total.name, count: total, percentage: 100, trend: 'stable', color: CUSTOMER_TYPE_CONFIG.total.color },
+    { type: 'random', name: CUSTOMER_TYPE_CONFIG.random.name, count: random, percentage: calculatePercentage(random), trend: 'stable', color: CUSTOMER_TYPE_CONFIG.random.color },
     { type: 'base', name: CUSTOMER_TYPE_CONFIG.base.name, count: base, percentage: calculatePercentage(base), trend: 'stable', color: CUSTOMER_TYPE_CONFIG.base.color },
     { type: 'risk', name: CUSTOMER_TYPE_CONFIG.risk.name, count: risk, percentage: calculatePercentage(risk), trend: risk > 0 ? 'up' : 'stable', color: CUSTOMER_TYPE_CONFIG.risk.color },
     { type: 'churn', name: CUSTOMER_TYPE_CONFIG.churn.name, count: churn, percentage: calculatePercentage(churn), trend: churn > 0 ? 'up' : 'stable', color: CUSTOMER_TYPE_CONFIG.churn.color },
-    { type: 'random', name: CUSTOMER_TYPE_CONFIG.random.name, count: random, percentage: calculatePercentage(random), trend: 'stable', color: CUSTOMER_TYPE_CONFIG.random.color },
+    { type: 'financialRisk', name: CUSTOMER_TYPE_CONFIG.financialRisk.name, count: financialRisk, percentage: calculatePercentage(financialRisk), trend: financialRisk > 0 ? 'up' : 'stable', color: CUSTOMER_TYPE_CONFIG.financialRisk.color },
   ];
+}
+
+// 计算加油站平均升优惠力度（优惠总额 / 总升数）
+function calculateStationAvgDiscountPerLiter(orders: Order[]): number {
+  if (orders.length === 0) return 0;
+  const totalDiscount = orders.reduce((sum, o) => sum + (o.discountTotal || 0), 0);
+  const totalQuantity = orders.reduce((sum, o) => sum + o.quantity, 0);
+  return totalQuantity > 0 ? totalDiscount / totalQuantity : 0;
+}
+
+// 计算单个客户的升优惠力度（优惠总额 / 总升数）
+function calculateCustomerDiscountPerLiter(customerId: string, orders: Order[]): number {
+  const customerOrders = orders.filter(o => {
+    const orderAny = o as any;
+    const phone = orderAny.subCardPhone || orderAny.payUserPhone || orderAny.phone;
+    const memberCode = orderAny.memberCode;
+    const carPlate = o.carPlate;
+
+    let id = '';
+    if (phone) id = String(phone).trim();
+    else if (memberCode) id = String(memberCode).trim();
+    else if (carPlate) id = 'PLATE_' + String(carPlate).trim();
+
+    return id === customerId;
+  });
+
+  if (customerOrders.length === 0) return 0;
+  const totalDiscount = customerOrders.reduce((sum, o) => sum + (o.discountTotal || 0), 0);
+  const totalQuantity = customerOrders.reduce((sum, o) => sum + o.quantity, 0);
+  return totalQuantity > 0 ? totalDiscount / totalQuantity : 0;
+}
+
+// 检测财务风险客户
+function detectFinancialRiskCustomers(orders: Order[], avgDiscountPerLiter: number): Set<string> {
+  const riskCustomerIds = new Set<string>();
+
+  // 按客户分组
+  const customerOrderMap = new Map<string, Order[]>();
+  orders.forEach(order => {
+    const orderAny = order as any;
+    const phone = orderAny.subCardPhone || orderAny.payUserPhone || orderAny.phone;
+    const memberCode = orderAny.memberCode;
+    const carPlate = order.carPlate;
+
+    let customerId = '';
+    if (phone && String(phone).trim() !== '') {
+      customerId = String(phone).trim();
+    } else if (memberCode && String(memberCode).trim() !== '') {
+      customerId = String(memberCode).trim();
+    } else if (carPlate && String(carPlate).trim() !== '') {
+      customerId = 'PLATE_' + String(carPlate).trim();
+    }
+
+    if (!customerId) return;
+
+    if (!customerOrderMap.has(customerId)) {
+      customerOrderMap.set(customerId, []);
+    }
+    customerOrderMap.get(customerId)!.push(order);
+  });
+
+  // 检查每个客户的财务风险
+  customerOrderMap.forEach((customerOrders, customerId) => {
+    // 条件1：单日消费次数>=2
+    const dayOrdersMap = new Map<string, number>();
+    customerOrders.forEach(o => {
+      const dayKey = dayjs(o.transactionTime).format('YYYY-MM-DD');
+      dayOrdersMap.set(dayKey, (dayOrdersMap.get(dayKey) || 0) + 1);
+    });
+    const hasHighDayOrders = Array.from(dayOrdersMap.values()).some(count => count >= 2);
+
+    // 条件2：7天内消费>=3次
+    const sortedOrders = [...customerOrders].sort((a, b) =>
+      new Date(a.transactionTime).getTime() - new Date(b.transactionTime).getTime()
+    );
+    let hasHigh7DayOrders = false;
+    for (let i = 0; i < sortedOrders.length; i++) {
+      const startDate = new Date(sortedOrders[i].transactionTime);
+      const endDate = new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+      const ordersIn7Days = sortedOrders.filter(o => {
+        const orderDate = new Date(o.transactionTime);
+        return orderDate >= startDate && orderDate <= endDate;
+      });
+      if (ordersIn7Days.length >= 3) {
+        hasHigh7DayOrders = true;
+        break;
+      }
+    }
+
+    // 条件3：消费不同油品（多油品）
+    const oilTypesSet = new Set<string>();
+    customerOrders.forEach(o => oilTypesSet.add(o.oilType));
+    const hasMultipleOilTypes = oilTypesSet.size >= 2;
+
+    // 客户的升优惠力度
+    const customerDiscountPerLiter = calculateCustomerDiscountPerLiter(customerId, orders);
+
+    // 满足任一条件且升优惠力度高于站点平均
+    if ((hasHighDayOrders || hasHigh7DayOrders || hasMultipleOilTypes) && customerDiscountPerLiter > avgDiscountPerLiter) {
+      riskCustomerIds.add(customerId);
+    }
+  });
+
+  return riskCustomerIds;
 }
 
 // 计算流失等级

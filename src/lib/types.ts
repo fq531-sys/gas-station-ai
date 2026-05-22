@@ -35,7 +35,7 @@ export interface Order {
 }
 
 // 客户分类
-export type CustomerType = 'total' | 'base' | 'risk' | 'churn' | 'random';
+export type CustomerType = 'total' | 'base' | 'risk' | 'churn' | 'random' | 'financialRisk';
 
 export interface CustomerSegment {
   type: CustomerType;

@@ -54,9 +54,10 @@ export const PAY_TYPES = [
 export const CUSTOMER_TYPE_CONFIG = {
   total: { name: '会员总数', color: '#3B82F6', description: '所有有客户标识的唯一客户数（手机号/会员编码/车牌）' },
   base: { name: '基本盘客户', color: '#10B981', description: '消费次数≥3 且 最后消费距数据截止日≤20天' },
-  risk: { name: '流失风险客户', color: '#EF4444', description: '消费次数≥2 且 最后消费距数据截止日≥20天且<30天' },
-  churn: { name: '流失客户', color: '#F59E0B', description: '消费次数≥2 且 最后消费距数据截止日≥30天' },
+  risk: { name: '流失风险客户', color: '#F59E0B', description: '消费次数≥2 且 最后消费距数据截止日≥20天且<30天' },
+  churn: { name: '流失客户', color: '#EF4444', description: '消费次数≥2 且 最后消费距数据截止日≥30天' },
   random: { name: '随机客户', color: '#6B7280', description: '仅消费过1次的客户' },
+  financialRisk: { name: '财务风险客户', color: '#DC2626', description: '单日消费≥2次 或 7天消费≥3次 或 消费多油品 且 升优惠力度异常高（疑似员工套现/代客支付）' },
 } as const;
 
 // 流失等级配置

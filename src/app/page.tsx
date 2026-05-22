@@ -6,6 +6,7 @@ import { formatCurrency, formatQuantity } from '@/lib/dataProcessor';
 import { CUSTOMER_TYPE_CONFIG } from '@/lib/constants';
 import dayjs from 'dayjs';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import LoginModal from '@/components/LoginModal';
 
 export default function Home() {
   const {
@@ -24,6 +25,28 @@ export default function Home() {
   const [dragActive, setDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [chartView, setChartView] = useState<'weekly' | 'monthly'>('weekly');
+  const [showPaywallModal, setShowPaywallModal] = useState(false);
+  const [pendingExportType, setPendingExportType] = useState<string | null>(null);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [loginSuccessCallback, setLoginSuccessCallback] = useState<(() => void) | null>(null);
+
+  // 登录状态
+  const isLoggedIn = useStore(state => state.isLoggedIn);
+  const user = useStore(state => state.user);
+  const login = useStore(state => state.login);
+  const hasPermission = useStore(state => state.hasPermission);
+
+  // 处理登录成功
+  const handleLoginSuccess = (loggedInUser: any) => {
+    if (loggedInUser) {
+      login(loggedInUser);
+      // 如果有回调函数，执行它
+      if (loginSuccessCallback) {
+        loginSuccessCallback();
+        setLoginSuccessCallback(null);
+      }
+    }
+  };
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -130,18 +153,57 @@ export default function Home() {
 
   // 导出客户表
   const exportCustomerTable = (type: string) => {
+    const paidTypes = ['churn', 'financialRisk'];
+
+    // 检查是否需要付费
+    if (paidTypes.includes(type)) {
+      // 先检查是否已登录
+      if (!isLoggedIn) {
+        // 设置登录成功后的回调
+        setLoginSuccessCallback(() => () => {
+          // 登录后直接执行导出（如果还没付费会继续弹出支付框）
+          doExportCustomerTable(type);
+        });
+        setShowLoginModal(true);
+        return;
+      }
+      // 检查权限
+      const permissionMap: Record<string, string> = {
+        churn: 'churn_export',
+        financialRisk: 'financial_risk_export',
+      };
+      if (!hasPermission(permissionMap[type])) {
+        setPendingExportType(type);
+        setShowPaywallModal(true);
+        return;
+      }
+    }
+
+    // 免费类型直接导出
+    doExportCustomerTable(type);
+  };
+
+  // 执行导出
+  const doExportCustomerTable = (type: string) => {
     let customersToExport: any[] = [];
     const allCustomers = useStore.getState().customers;
+    const orders = useStore.getState().orders;
+
+    const typeNameMap: Record<string, string> = {
+      base: '基本盘客户',
+      risk: '流失风险客户',
+      churn: '流失客户',
+      financialRisk: '财务风险客户',
+    };
 
     if (type === 'base') {
-      // 基本盘客户
       customersToExport = allCustomers.filter(c => c.customerType === 'base');
     } else if (type === 'risk') {
-      // 流失风险客户
       customersToExport = allCustomers.filter(c => c.customerType === 'risk');
     } else if (type === 'churn') {
-      // 流失客户
       customersToExport = allCustomers.filter(c => c.customerType === 'churn');
+    } else if (type === 'financialRisk') {
+      customersToExport = allCustomers.filter(c => c.customerType === 'financialRisk');
     }
 
     if (customersToExport.length === 0) {
@@ -149,21 +211,133 @@ export default function Home() {
       return;
     }
 
-    const data = customersToExport.map((c, index) => ({
-      '序号': index + 1,
-      '客户标识': c.customerId,
-      '客户电话': c.phone || '-',
-      '加油油品': c.oilTypePreference?.join(', ') || '-',
-      '累计加油金额': c.totalAmount?.toFixed(2) || '0',
-      '最后一次消费时间': c.lastOrderDate ? dayjs(c.lastOrderDate).format('YYYY-MM-DD') : '-',
-    }));
+    alert(`正在导出${typeNameMap[type] || type}，请稍候...`);
+
+    const data = customersToExport.map((c, index) => {
+      const baseData: any = {
+        '序号': index + 1,
+        '客户标识': c.customerId,
+        '客户电话': c.phone || '-',
+        '加油油品': c.oilTypePreference?.join(', ') || '-',
+        '累计加油金额': c.totalAmount?.toFixed(2) || '0',
+        '最后一次消费时间': c.lastOrderDate ? dayjs(c.lastOrderDate).format('YYYY-MM-DD') : '-',
+      };
+
+      // 财务风险客户需要添加原因说明和消费时间段
+      if (type === 'financialRisk') {
+        const { reason, timePeriods } = getFinancialRiskDetail(c.customerId, orders);
+        baseData['风险原因'] = reason;
+        baseData['消费时间段'] = timePeriods;
+      }
+
+      return baseData;
+    });
 
     import('xlsx').then(XLSX => {
       const ws = XLSX.utils.json_to_sheet(data);
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, '客户表');
-      XLSX.writeFile(wb, `客户表_${type}_${dayjs().format('YYYYMMDD')}.xlsx`);
+      const typeNameMap: Record<string, string> = {
+        base: '基本盘客户',
+        risk: '流失风险客户',
+        churn: '流失客户',
+        financialRisk: '财务风险客户',
+      };
+      const actionNameMap: Record<string, string> = {
+        base: '深度运营',
+        risk: '客户召回',
+        churn: '客户召回',
+        financialRisk: '风险排查',
+      };
+      XLSX.utils.book_append_sheet(wb, ws, typeNameMap[type] || '客户表');
+      const fileName = `客户表_${actionNameMap[type] || '导出'}_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`;
+
+      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      const blob = new Blob([wbout], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      alert(`${typeNameMap[type] || '客户表'}导出成功！共 ${customersToExport.length} 条记录`);
     });
+  };
+
+  // 模拟支付（实际生产环境需要接入真实支付）
+  const handlePay = () => {
+    setShowPaywallModal(false);
+    alert('支付功能开发中，请联系客服开通会员权限！\n\n客服电话：400-XXX-XXXX');
+  };
+
+  // 获取财务风险原因和消费时间段
+  const getFinancialRiskDetail = (customerId: string, orders: any[]): { reason: string; timePeriods: string } => {
+    const customerOrders = orders.filter(o => {
+      const orderAny = o as any;
+      const phone = orderAny.subCardPhone || orderAny.payUserPhone || orderAny.phone;
+      const memberCode = orderAny.memberCode;
+      const carPlate = o.carPlate;
+
+      let id = '';
+      if (phone) id = String(phone).trim();
+      else if (memberCode) id = String(memberCode).trim();
+      else if (carPlate) id = 'PLATE_' + String(carPlate).trim();
+
+      return id === customerId;
+    });
+
+    const reasons: string[] = [];
+    const timePeriods: string[] = [];
+
+    // 检查单日消费>=2
+    const dayOrdersMap = new Map<string, any[]>();
+    customerOrders.forEach(o => {
+      const dayKey = dayjs(o.transactionTime).format('YYYY-MM-DD');
+      if (!dayOrdersMap.has(dayKey)) {
+        dayOrdersMap.set(dayKey, []);
+      }
+      dayOrdersMap.get(dayKey)!.push(o);
+    });
+
+    dayOrdersMap.forEach((dayOrders, dayKey) => {
+      if (dayOrders.length >= 2) {
+        reasons.push(`单日消费≥2次(${dayKey})`);
+        const times = dayOrders.map(o => dayjs(o.transactionTime).format('HH:mm')).join(', ');
+        timePeriods.push(`${dayKey} ${times} (${dayOrders.length}次)`);
+      }
+    });
+
+    // 检查7天内消费>=3
+    const sortedOrders = [...customerOrders].sort((a, b) =>
+      new Date(a.transactionTime).getTime() - new Date(b.transactionTime).getTime()
+    );
+    for (let i = 0; i < sortedOrders.length; i++) {
+      const startDate = new Date(sortedOrders[i].transactionTime);
+      const endDate = new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+      const ordersIn7Days = sortedOrders.filter(o => {
+        const orderDate = new Date(o.transactionTime);
+        return orderDate >= startDate && orderDate <= endDate;
+      });
+      if (ordersIn7Days.length >= 3 && !reasons.some(r => r.includes('7天内消费'))) {
+        reasons.push(`7天内消费≥3次(${dayjs(startDate).format('MM/DD')}-${dayjs(endDate).format('MM/DD')})`);
+        timePeriods.push(`7天周期: ${dayjs(startDate).format('YYYY-MM-DD')} 起，${ordersIn7Days.length}次消费`);
+        break;
+      }
+    }
+
+    // 检查多油品
+    const oilTypesSet = new Set<string>();
+    customerOrders.forEach(o => oilTypesSet.add(o.oilType));
+    if (oilTypesSet.size >= 2) {
+      reasons.push(`消费多油品(${Array.from(oilTypesSet).join(', ')})`);
+    }
+
+    return {
+      reason: reasons.length > 0 ? reasons.join('; ') : '升优惠力度异常',
+      timePeriods: timePeriods.length > 0 ? timePeriods.join('; ') : '-',
+    };
   };
 
   return (
@@ -171,6 +345,30 @@ export default function Home() {
       <div className="max-w-6xl mx-auto">
         {/* 头部 */}
         <header className="text-center mb-8">
+          <div className="flex items-center justify-end mb-4">
+            {isLoggedIn ? (
+              <div className="flex items-center gap-3 px-4 py-2 bg-white rounded-full shadow">
+                <span className="text-sm text-gray-600">👤 {user?.phone}</span>
+                <span className={`text-xs px-2 py-1 rounded-full ${
+                  user?.memberLevel === 'ultimate' ? 'bg-purple-100 text-purple-700' :
+                  user?.memberLevel === 'advanced' ? 'bg-blue-100 text-blue-700' :
+                  user?.memberLevel === 'primary' ? 'bg-green-100 text-green-700' :
+                  'bg-gray-100 text-gray-500'
+                }`}>
+                  {user?.memberLevel === 'ultimate' ? '终极' :
+                   user?.memberLevel === 'advanced' ? '高级' :
+                   user?.memberLevel === 'primary' ? '初级' : '免费'}会员
+                </span>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowLoginModal(true)}
+                className="px-4 py-2 bg-white rounded-full shadow text-sm text-blue-600 hover:text-blue-700 font-medium"
+              >
+                登录/注册
+              </button>
+            )}
+          </div>
           <h1 className="text-4xl font-bold text-gray-800 mb-2">
             🚗 加油站AI智能营销官
           </h1>
@@ -360,7 +558,7 @@ export default function Home() {
                     <h4 className="text-sm font-medium text-gray-600 mb-3">日均销量（升）</h4>
                     <div className="h-72">
                       <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={chartView === 'weekly' ? chartData.weekly : chartData.monthly}>
+                        <LineChart data={chartView === 'weekly' ? chartData.weekly : chartData.monthly as any}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                           <XAxis
                             dataKey={chartView === 'weekly' ? 'week' : 'month'}
@@ -386,7 +584,7 @@ export default function Home() {
             {/* 客户构成 */}
             <div className="bg-white rounded-2xl shadow-lg p-6">
               <h3 className="text-lg font-bold text-gray-800 mb-4">👥 客户构成分析</h3>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
                 {customerSegments.map((segment) => (
                   <div
                     key={segment.type}
@@ -409,18 +607,39 @@ export default function Home() {
                     {segment.type === 'base' && (
                       <button
                         onClick={() => exportCustomerTable('base')}
-                        className="mt-2 px-3 py-1 text-xs bg-white text-gray-700 rounded-full border border-gray-200 hover:bg-gray-50 hover:border-blue-400 transition-colors"
+                        title="下载客户列表，进行深度运营"
+                        className="mt-2 w-full px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium shadow-sm flex items-center justify-center gap-1"
                       >
-                        深度运营
+                        <span className="text-lg">⬇</span> 深度运营
                       </button>
                     )}
                     {(segment.type === 'risk' || segment.type === 'churn') && (
                       <button
                         onClick={() => exportCustomerTable(segment.type)}
-                        className="mt-2 px-3 py-1 text-xs bg-white text-gray-700 rounded-full border border-gray-200 hover:bg-gray-50 hover:border-blue-400 transition-colors"
+                        title="下载客户列表，进行客户召回"
+                        className="mt-2 w-full px-3 py-2 text-sm bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors font-medium shadow-sm flex items-center justify-center gap-1"
                       >
-                        客户召回
+                        <span className="text-lg">⬇</span> 客户召回
                       </button>
+                    )}
+                    {segment.type === 'churn' && (
+                      <div className="text-xs text-orange-600 mt-1 font-medium">
+                        初级会员服务
+                      </div>
+                    )}
+                    {segment.type === 'financialRisk' && (
+                      <button
+                        onClick={() => exportCustomerTable('financialRisk')}
+                        title="下载客户列表，进行风险排查"
+                        className="mt-2 w-full px-3 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium shadow-sm flex items-center justify-center gap-1"
+                      >
+                        <span className="text-lg">⬇</span> 风险排查
+                      </button>
+                    )}
+                    {segment.type === 'financialRisk' && (
+                      <div className="text-xs text-red-600 mt-1 font-medium">
+                        初级会员服务
+                      </div>
                     )}
                   </div>
                 ))}
@@ -473,6 +692,95 @@ export default function Home() {
             <div className="bg-white rounded-xl shadow p-4 text-center text-sm text-gray-500">
               共导入 {orders.length} 条订单记录 · 数据时间范围：{salesOverview?.dateRange && dayjs(salesOverview.dateRange.start).format('MM/DD')} - {salesOverview?.dateRange && dayjs(salesOverview.dateRange.end).format('MM/DD')}
             </div>
+
+            {/* 付费弹窗 */}
+            {showPaywallModal && (
+              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                <div className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl">
+                  <div className="text-center">
+                    <div className="text-6xl mb-4">👑</div>
+                    <h3 className="text-2xl font-bold text-gray-800 mb-2">开通初级会员</h3>
+                    <p className="text-gray-600 mb-4">
+                      {pendingExportType === 'churn' ? '客户召回功能' : '风险排查功能'}属于初级会员服务
+                    </p>
+
+                    {/* 价值说明 */}
+                    <div className="bg-gradient-to-r from-orange-50 to-red-50 rounded-xl p-5 mb-5 text-left">
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-2xl">{pendingExportType === 'churn' ? '📞' : '🔍'}</span>
+                        <span className="font-bold text-gray-800">
+                          {pendingExportType === 'churn' ? '流失客户召回' : '财务风险排查'}
+                        </span>
+                      </div>
+                      {pendingExportType === 'churn' ? (
+                        <ul className="text-sm text-gray-600 space-y-2 ml-8">
+                          <li>• 识别已沉默的客户群体</li>
+                          <li>• 获取客户消费记录和联系方式</li>
+                          <li>• 针对性的召回策略提升复购</li>
+                          <li>• 挽回流失客户，提升营收</li>
+                        </ul>
+                      ) : (
+                        <ul className="text-sm text-gray-600 space-y-2 ml-8">
+                          <li>• 发现异常消费模式和潜在欺诈</li>
+                          <li>• 查看详细消费时间段和频次</li>
+                          <li>• 识别恶意套现风险客户</li>
+                          <li>• 保护加油站经营利益</li>
+                        </ul>
+                      )}
+                    </div>
+
+                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-5 mb-5">
+                      <div className="text-sm text-gray-500 mb-1">终身有效会员</div>
+                      <div className="text-4xl font-bold text-blue-600">¥28.8</div>
+                      <div className="text-xs text-gray-400 mt-1">一次付费，永久使用</div>
+                    </div>
+
+                    <div className="text-left text-sm text-gray-600 mb-5 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-green-500">✓</span> 无限下载流失客户名单
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-green-500">✓</span> 无限下载财务风险客户名单
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-green-500">✓</span> 获取详细消费时间段
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-green-500">✓</span> 优先客服支持
+                      </div>
+                    </div>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => setShowPaywallModal(false)}
+                        className="flex-1 px-4 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium"
+                      >
+                        稍后再说
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowPaywallModal(false);
+                          // 模拟支付成功，直接执行导出
+                          doExportCustomerTable(pendingExportType!);
+                        }}
+                        className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:from-blue-700 hover:to-indigo-700 transition-colors font-medium shadow-lg"
+                      >
+                        立即开通 ¥28.8
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-400 mt-4">
+                      支付遇到问题？联系客服：400-XXX-XXXX
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 登录弹窗 */}
+            <LoginModal
+              isOpen={showLoginModal}
+              onClose={() => setShowLoginModal(false)}
+              onLoginSuccess={handleLoginSuccess}
+            />
           </div>
         )}
       </div>
