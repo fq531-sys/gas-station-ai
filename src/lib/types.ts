@@ -30,6 +30,8 @@ export interface Order {
   discountedPrice: number; // 优惠后单价
   memberTag: string; // 标签名称
   hour: number; // 小时（计算字段）
+  phone?: string; // 手机号码
+  memberCode?: string; // 会员编码
 }
 
 // 客户分类
@@ -44,9 +46,11 @@ export interface CustomerSegment {
   color: string;
 }
 
-// 客户数据（以电话为唯一标识）
+// 客户数据（以客户标识为唯一标识，手机号或会员编码）
 export interface Customer {
-  phone: string; // 手机号码（唯一标识）
+  customerId: string; // 客户标识（手机号或会员编码）
+  phone?: string; // 手机号码（可选）
+  memberCode?: string; // 会员编码（可选）
   carPlate?: string; // 车牌号（可选）
   name?: string; // 客户名称
   totalOrders: number;
@@ -59,6 +63,35 @@ export interface Customer {
   churnLevel?: 'A' | 'B' | 'C' | 'D'; // 流失等级
   riskLevel?: 'high' | 'medium' | 'low'; // 风险等级
   riskScore?: number; // 综合风险评分
+}
+
+// 油品日销量（按油品类型分组的日销量）
+export interface OilTypeDailySales {
+  date: string;
+  '92#': number;
+  '95#': number;
+  '98#': number;
+  '0#': number;
+  gasoline: number; // 汽油总计（92# + 95# + 98#）
+  diesel: number; // 柴油（0#）
+}
+
+// 统计数据
+export interface StatisticsData {
+  // 按油品日均销量
+  dailyAvgByOilType: {
+    '92#': number;
+    '95#': number;
+    '98#': number;
+    '0#': number;
+  };
+  // 核心指标
+  avgOrderAmount: number; // 客单价
+  avgOrderQuantity: number; // 客单升
+  avgDiscountCost: number; // 升油优惠成本
+  // 数据周期
+  totalDays: number;
+  dateRange: { start: Date; end: Date };
 }
 
 // 销售概况
@@ -76,6 +109,9 @@ export interface SalesOverview {
     quantity: number;
     amount: number;
   };
+  // 新增核心指标
+  statistics: StatisticsData;
+  oilTypeDailySales: OilTypeDailySales[];
 }
 
 // 日销售数据

@@ -58,11 +58,15 @@ export const useStore = create<AppState>((set, get) => ({
 
       const orders = result.orders;
 
+      // 计算数据截止日（最后一笔消费时间）
+      const transactionTimes = orders.map(o => new Date(o.transactionTime).getTime());
+      const dataEndDate = new Date(Math.max(...transactionTimes));
+
       // 计算各项指标
       const salesOverview = calculateSalesOverview(orders);
       const dailySales = calculateDailySales(orders);
       const customers = aggregateCustomers(orders);
-      const customerSegments = classifyCustomers(customers, get().config.churnDays, get().config.baseCustomerMinOrders);
+      const customerSegments = classifyCustomers(customers, dataEndDate);
       const riskAlerts = detectAllRisks(orders);
 
       set({

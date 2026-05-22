@@ -31,6 +31,11 @@ export const FIELD_MAPPING: Record<string, string> = {
   '通道结算金额': 'channelSettleAmount',
   '优惠后单价': 'discountedPrice',
   '标签名称': 'memberTag',
+  '手机号码': 'phone',
+  '会员手机': 'phone',
+  '电话号码': 'phone',
+  '会员编码': 'memberCode',
+  '卡号': 'memberCode',
 };
 
 // 油品类型
@@ -47,11 +52,11 @@ export const PAY_TYPES = [
 
 // 客户群类型配置
 export const CUSTOMER_TYPE_CONFIG = {
-  total: { name: '会员总数', color: '#3B82F6' },
-  base: { name: '基本盘客户', color: '#10B981' },
-  risk: { name: '风险客户', color: '#EF4444' },
-  churn: { name: '流失客户', color: '#F59E0B' },
-  random: { name: '随机客户', color: '#6B7280' },
+  total: { name: '会员总数', color: '#3B82F6', description: '所有有客户标识的唯一客户数（手机号/会员编码/车牌）' },
+  base: { name: '基本盘客户', color: '#10B981', description: '消费次数≥3 且 最后消费距数据截止日≤20天' },
+  risk: { name: '流失风险客户', color: '#EF4444', description: '消费次数≥2 且 最后消费距数据截止日≥20天且<30天' },
+  churn: { name: '流失客户', color: '#F59E0B', description: '消费次数≥2 且 最后消费距数据截止日≥30天' },
+  random: { name: '随机客户', color: '#6B7280', description: '仅消费过1次的客户' },
 } as const;
 
 // 流失等级配置

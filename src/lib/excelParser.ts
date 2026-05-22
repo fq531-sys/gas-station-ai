@@ -104,38 +104,57 @@ export function parseExcelFileSmart(file: File): Promise<ParseResult> {
       try {
         const data = e.target?.result;
         const workbook = XLSX.read(data, { type: 'array' });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
 
-        if (jsonData.length < 3) {
-          reject(new Error('数据文件格式错误，行数不足'));
+        // 收集所有sheet的数据
+        const allOrders: Order[] = [];
+        const allFieldMappings: Record<string, string>[] = [];
+        let totalRows = 0;
+
+        // 遍历所有sheet
+        for (const sheetName of workbook.SheetNames) {
+          const worksheet = workbook.Sheets[sheetName];
+          const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+
+          if (jsonData.length < 3) continue;
+
+          // 第0行是站点信息，第1行是列名，数据从第2行开始
+          const headerRow = jsonData[1] as string[];
+          const dataRows = jsonData.slice(2).filter(row => row.length > 0);
+          totalRows += dataRows.length;
+
+          if (headerRow.length === 0 || dataRows.length === 0) continue;
+
+          // 每个sheet使用自己的header进行字段映射
+          const fieldMapping = intelligentFieldMapping(headerRow);
+
+          // 解析这个sheet的数据
+          const result = parseDataRowsWithMapping(dataRows, headerRow, fieldMapping);
+          allOrders.push(...result.orders);
+          allFieldMappings.push(fieldMapping);
+        }
+
+        if (allOrders.length === 0) {
+          reject(new Error('没有找到有效的订单数据'));
           return;
         }
 
-        // 第0行是站点信息，第1行是列名，数据从第2行开始
-        const headerRow = jsonData[1] as string[]; // 真正的列名在第2行
-        const dataRows = jsonData.slice(2).filter(row => row.length > 0);
-
-        // 智能匹配字段
-        const fieldMapping = intelligentFieldMapping(headerRow);
-
-        // 检查必填字段
-        const missingCoreFields = CORE_FIELDS.filter(field => !fieldMapping[field]);
-        if (missingCoreFields.length > 0) {
-          console.warn('缺少核心字段:', missingCoreFields);
+        // 合并所有sheet的字段映射（取第一个非空值）
+        const mergedFieldMapping: Record<string, string> = {};
+        for (const mapping of allFieldMappings) {
+          for (const [field, column] of Object.entries(mapping)) {
+            if (!mergedFieldMapping[field] && column) {
+              mergedFieldMapping[field] = column;
+            }
+          }
         }
 
-        // 解析数据
-        const result = parseDataRows(dataRows, headerRow, fieldMapping);
-
         resolve({
-          orders: result.orders,
-          fieldMapping,
+          orders: allOrders,
+          fieldMapping: mergedFieldMapping,
           stats: {
-            totalRows: dataRows.length,
-            validRows: result.orders.length,
-            errorRows: dataRows.length - result.orders.length,
+            totalRows,
+            validRows: allOrders.length,
+            errorRows: totalRows - allOrders.length,
           },
         });
       } catch (error) {
@@ -190,6 +209,91 @@ function intelligentFieldMapping(headers: string[]): Record<string, string> {
 
 // 解析数据行
 function parseDataRows(
+  dataRows: any[][],
+  headers: string[],
+  fieldMapping: Record<string, string>
+): { orders: Order[]; errors: string[] } {
+  const orders: Order[] = [];
+  const errors: string[] = [];
+
+  // 建立列索引映射（Excel列名 -> 索引）
+  const columnIndexMap: Record<string, number> = {};
+  headers.forEach((header, index) => {
+    columnIndexMap[header.trim()] = index;
+  });
+
+  // 建立系统字段 -> 列索引映射
+  const fieldToColumnIndex: Record<string, number> = {};
+  for (const [field, columnName] of Object.entries(fieldMapping)) {
+    const index = columnIndexMap[columnName];
+    if (index !== undefined) {
+      fieldToColumnIndex[field] = index;
+    }
+  }
+
+  dataRows.forEach((row, rowIndex) => {
+    try {
+      const order: any = {};
+
+      // 解析必填字段
+      for (const field of CORE_FIELDS) {
+        const colIndex = fieldToColumnIndex[field];
+        if (colIndex !== undefined) {
+          let value = row[colIndex];
+
+          // 类型转换
+          if (NUMERIC_FIELDS.includes(field as any)) {
+            value = parseFloat(value) || 0;
+          } else if (DATE_FIELDS.includes(field as any)) {
+            value = parseDateTime(value);
+          }
+
+          order[field] = value;
+        }
+      }
+
+      // 解析可选字段
+      for (const field of OPTIONAL_FIELDS) {
+        const colIndex = fieldToColumnIndex[field];
+        if (colIndex !== undefined) {
+          let value = row[colIndex];
+
+          if ((NUMERIC_FIELDS as readonly string[]).includes(field)) {
+            value = parseFloat(value) || 0;
+          }
+
+          order[field] = value;
+        }
+      }
+
+      // 解析日期字段（单独处理）
+      const transactionTimeIndex = fieldToColumnIndex['transactionTime'];
+      if (transactionTimeIndex !== undefined) {
+        order.transactionTime = parseDateTime(row[transactionTimeIndex]);
+      }
+
+      // 计算小时字段
+      if (order.transactionTime) {
+        order.hour = new Date(order.transactionTime).getHours();
+      }
+
+      // 验证必填字段
+      if (!order.orderId || !order.transactionTime) {
+        errors.push(`行${rowIndex + 2}: 缺少必填字段`);
+        return;
+      }
+
+      orders.push(order as Order);
+    } catch (error) {
+      errors.push(`行${rowIndex + 2}: 解析错误`);
+    }
+  });
+
+  return { orders, errors };
+}
+
+// 解析数据行（使用传入的fieldMapping，每个sheet独立解析）
+function parseDataRowsWithMapping(
   dataRows: any[][],
   headers: string[],
   fieldMapping: Record<string, string>

@@ -82,6 +82,15 @@ export function calculateSalesOverview(orders: Order[]): SalesOverview {
       dailyAmount: 0,
       dateRange: { start: new Date(), end: new Date() },
       comparisonRate: { orders: 0, quantity: 0, amount: 0 },
+      statistics: {
+        dailyAvgByOilType: { '92#': 0, '95#': 0, '98#': 0, '0#': 0 },
+        avgOrderAmount: 0,
+        avgOrderQuantity: 0,
+        avgDiscountCost: 0,
+        totalDays: 0,
+        dateRange: { start: new Date(), end: new Date() },
+      },
+      oilTypeDailySales: [],
     };
   }
 
@@ -93,6 +102,45 @@ export function calculateSalesOverview(orders: Order[]): SalesOverview {
   const totalOrders = orders.length;
   const totalQuantity = orders.reduce((sum, o) => sum + o.quantity, 0);
   const totalAmount = orders.reduce((sum, o) => sum + o.actualAmount, 0);
+  const totalDiscount = orders.reduce((sum, o) => sum + (o.discountTotal || 0), 0);
+
+  // 计算按油品分组的日销量
+  const oilTypeDailyMap = new Map<string, { '92#': number; '95#': number; '98#': number; '0#': number }>();
+
+  // 按日期和油品汇总
+  const dailyOilTypeMap = new Map<string, { '92#': number; '95#': number; '98#': number; '0#': number }>();
+  orders.forEach(order => {
+    const dateKey = dayjs(order.transactionTime).format('YYYY-MM-DD');
+    const oilType = normalizeOilType(order.oilType);
+
+    if (!dailyOilTypeMap.has(dateKey)) {
+      dailyOilTypeMap.set(dateKey, { '92#': 0, '95#': 0, '98#': 0, '0#': 0 });
+    }
+    const existing = dailyOilTypeMap.get(dateKey)!;
+    existing[oilType as keyof typeof existing] += order.quantity;
+  });
+
+  // 转换为数组
+  const oilTypeDailySales = Array.from(dailyOilTypeMap.entries())
+    .map(([date, data]) => ({
+      date,
+      ...data,
+      gasoline: (data['92#'] || 0) + (data['95#'] || 0) + (data['98#'] || 0),
+      diesel: data['0#'] || 0,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  // 计算按油品的日均销量
+  const dailyAvgByOilType = { '92#': 0, '95#': 0, '98#': 0, '0#': 0 };
+  for (const daily of oilTypeDailySales) {
+    dailyAvgByOilType['92#'] += daily['92#'];
+    dailyAvgByOilType['95#'] += daily['95#'];
+    dailyAvgByOilType['98#'] += daily['98#'];
+    dailyAvgByOilType['0#'] += daily['0#'];
+  }
+  for (const key of ['92#', '95#', '98#', '0#'] as const) {
+    dailyAvgByOilType[key] = dailyAvgByOilType[key] / days;
+  }
 
   return {
     totalOrders,
@@ -104,7 +152,27 @@ export function calculateSalesOverview(orders: Order[]): SalesOverview {
     dailyAmount: totalAmount / days,
     dateRange: { start: startDate, end: endDate },
     comparisonRate: { orders: 0, quantity: 0, amount: 0 },
+    statistics: {
+      dailyAvgByOilType,
+      avgOrderAmount: totalOrders > 0 ? totalAmount / totalOrders : 0,
+      avgOrderQuantity: totalOrders > 0 ? totalQuantity / totalOrders : 0,
+      avgDiscountCost: totalQuantity > 0 ? totalDiscount / totalQuantity : 0, // 升油优惠成本 = 优惠总额 / 总升数
+      totalDays: days,
+      dateRange: { start: startDate, end: endDate },
+    },
+    oilTypeDailySales,
   };
+}
+
+// 规范化油品类型
+function normalizeOilType(oilType: string): string {
+  if (!oilType) return '0#';
+  const normalized = oilType.trim().toUpperCase();
+  if (normalized === '92#' || normalized === '92' || normalized === '汽油92') return '92#';
+  if (normalized === '95#' || normalized === '95' || normalized === '汽油95') return '95#';
+  if (normalized === '98#' || normalized === '98' || normalized === '汽油98') return '98#';
+  if (normalized === '0#' || normalized === '0' || normalized === '柴油0') return '0#';
+  return '0#'; // 默认柴油
 }
 
 // 计算日销售趋势

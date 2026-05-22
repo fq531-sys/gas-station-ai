@@ -58,7 +58,9 @@ export default function RecallPage() {
     const data = recallCustomers.map((c, index) => ({
       '序号': index + 1,
       '流失等级': CHURN_LEVEL_CONFIG[c.churnLevel!]?.name || c.churnLevel,
-      '手机号码': c.phone,
+      '客户标识': c.customerId,
+      '手机号码': c.phone || '-',
+      '会员编码': c.memberCode || '-',
       '车牌号': c.carPlate || '-',
       '累计消费次数': c.totalOrders,
       '累计消费金额': c.totalAmount.toFixed(2),
@@ -77,13 +79,14 @@ export default function RecallPage() {
   // 导出电话清单（TXT格式）
   const exportPhoneList = () => {
     if (recallCustomers.length === 0) return;
-    const phones = recallCustomers.map(c => c.phone).filter(p => p && p !== '--未知--');
+    // 优先使用phone，其次使用memberCode，最后使用customerId
+    const phones = recallCustomers.map(c => c.phone || c.memberCode || c.customerId).filter(p => p && p !== '--未知--');
     const text = phones.join('\n');
     const blob = new Blob([text], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `电话清单_${dayjs().format('YYYYMMDD')}.txt`;
+    a.download = `客户清单_${dayjs().format('YYYYMMDD')}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -251,7 +254,7 @@ export default function RecallPage() {
               </thead>
               <tbody>
                 {recallCustomers.slice(0, 50).map((customer, index) => (
-                  <tr key={customer.phone + index} className="border-b hover:bg-gray-50">
+                  <tr key={customer.customerId + index} className="border-b hover:bg-gray-50">
                     <td className="py-2 px-2">
                       <span
                         className="px-2 py-1 rounded text-xs font-medium text-white"
@@ -260,7 +263,7 @@ export default function RecallPage() {
                         {customer.churnLevel}
                       </span>
                     </td>
-                    <td className="py-2 px-2 font-medium">{customer.phone}</td>
+                    <td className="py-2 px-2 font-medium">{customer.customerId}</td>
                     <td className="py-2 px-2">{customer.carPlate || '-'}</td>
                     <td className="py-2 px-2 text-right">{customer.totalOrders}</td>
                     <td className="py-2 px-2 text-right">¥{customer.totalAmount.toFixed(0)}</td>

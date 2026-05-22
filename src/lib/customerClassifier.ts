@@ -4,10 +4,12 @@ import { Order, Customer, CustomerSegment, CustomerType, RecallFilter, RecallCus
 import { CUSTOMER_TYPE_CONFIG, CHURN_LEVEL_CONFIG } from './constants';
 import dayjs from 'dayjs';
 
-// 按电话号码聚合客户数据
+// 按客户标识聚合客户数据（手机号或会员编码）
 export function aggregateCustomers(orders: Order[]): Customer[] {
   const customerMap = new Map<string, {
-    phone: string;
+    customerId: string;
+    phone?: string;
+    memberCode?: string;
     carPlate?: string;
     name?: string;
     totalOrders: number;
@@ -17,12 +19,16 @@ export function aggregateCustomers(orders: Order[]): Customer[] {
   }>();
 
   orders.forEach(order => {
-    // 优先使用电话号码作为唯一标识
-    const phone = extractPhone(order);
-    if (!phone) return; // 没有电话视为散客，跳过
+    const orderAny = order as any;
 
-    const existing = customerMap.get(phone) || {
-      phone,
+    // 使用客户标识作为唯一标识
+    const customerId = extractCustomerId(order);
+    if (!customerId) return; // 没有标识视为散客，跳过
+
+    const existing = customerMap.get(customerId) || {
+      customerId,
+      phone: orderAny.subCardPhone || orderAny.payUserPhone || orderAny.phone,
+      memberCode: orderAny.memberCode,
       carPlate: order.carPlate,
       name: order.memberNickname,
       totalOrders: 0,
@@ -41,11 +47,13 @@ export function aggregateCustomers(orders: Order[]): Customer[] {
       existing.lastOrderDate = orderDate;
     }
 
-    customerMap.set(phone, existing);
+    customerMap.set(customerId, existing);
   });
 
   return Array.from(customerMap.values()).map(c => ({
+    customerId: c.customerId,
     phone: c.phone,
+    memberCode: c.memberCode,
     carPlate: c.carPlate,
     name: c.name,
     totalOrders: c.totalOrders,
@@ -58,23 +66,35 @@ export function aggregateCustomers(orders: Order[]): Customer[] {
   }));
 }
 
-// 从订单中提取手机号
-function extractPhone(order: Order): string {
-  // 优先使用子卡手机号
-  if ((order as any).subCardPhone) {
-    return (order as any).subCardPhone;
+// 从订单中提取客户标识（手机号或会员编码）
+function extractCustomerId(order: Order): string {
+  const orderAny = order as any;
+
+  // 优先使用手机号（从各种可能的字段获取）
+  const phone = orderAny.subCardPhone || orderAny.payUserPhone || orderAny.phone;
+  if (phone && String(phone).trim() !== '') {
+    return String(phone).trim();
   }
-  // 使用付款用户手机号
-  if ((order as any).payUserPhone) {
-    return (order as any).payUserPhone;
+
+  // 使用会员编码
+  const memberCode = orderAny.memberCode;
+  if (memberCode && String(memberCode).trim() !== '') {
+    return String(memberCode).trim();
   }
-  // 如果没有明确的电话字段，从车牌或会员昵称中无法提取，返回空
+
+  // 如果都没有，使用车牌作为唯一标识（但同车牌可能多人使用，优先级最低）
+  if (order.carPlate && order.carPlate.trim() !== '') {
+    return 'PLATE_' + order.carPlate.trim();
+  }
+
   return '';
 }
 
 // 分类客户
-export function classifyCustomers(customers: Customer[], churnDays: number = 30, baseMinOrders: number = 3): CustomerSegment[] {
-  const riskCustomerPhones = new Set<string>(); // TODO: 需要从风险检测模块获取
+export function classifyCustomers(customers: Customer[], dataEndDate?: Date): CustomerSegment[] {
+  // 计算数据截止日（最后消费时间）
+  const cutoffDate = dataEndDate || new Date();
+  const riskCustomerIds = new Set<string>(); // TODO: 需要从风险检测模块获取
 
   let total = customers.length;
   let base = 0;
@@ -83,18 +103,31 @@ export function classifyCustomers(customers: Customer[], churnDays: number = 30,
   let random = 0;
 
   customers.forEach(c => {
-    if (riskCustomerPhones.has(c.phone)) {
+    // 计算距离数据截止日的天数
+    const daysFromCutoff = Math.floor((cutoffDate.getTime() - new Date(c.lastOrderDate).getTime()) / (1000 * 60 * 60 * 24));
+
+    if (riskCustomerIds.has(c.customerId)) {
       risk++;
       c.customerType = 'risk';
     } else if (c.totalOrders === 1) {
       random++;
       c.customerType = 'random';
-    } else if (c.daysSinceLastOrder > churnDays && c.totalOrders >= 2) {
+    } else if (c.totalOrders >= 3 && daysFromCutoff <= 20) {
+      // 基本盘客户：消费次数≥3 且 最后消费距数据截止日≤20天
+      base++;
+      c.customerType = 'base';
+    } else if (c.totalOrders >= 2 && daysFromCutoff >= 20 && daysFromCutoff < 30) {
+      // 流失风险客户：消费次数≥2 且 最后消费距数据截止日≥20天且<30天
+      risk++;
+      c.customerType = 'risk';
+    } else if (c.totalOrders >= 2 && daysFromCutoff >= 30) {
+      // 流失客户：消费次数≥2 且 最后消费距数据截止日≥30天
       churn++;
       c.customerType = 'churn';
     } else {
-      base++;
-      c.customerType = 'base';
+      // 其他的归类为流失风险客户（消费≥2次但天数<20的，或消费次数2但天数<20的）
+      risk++;
+      c.customerType = 'risk';
     }
   });
 
