@@ -743,7 +743,7 @@ export default function Home() {
             </div>
 
             {/* 快捷操作 */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <a
                 href="/dashboard"
                 className="bg-white rounded-xl shadow p-6 hover:shadow-lg transition-shadow group"
@@ -779,6 +779,19 @@ export default function Home() {
                   <div>
                     <div className="font-semibold text-gray-800">系统设置</div>
                     <div className="text-sm text-gray-500">配置分析条件</div>
+                  </div>
+                </div>
+              </a>
+
+              <a
+                href="/company"
+                className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-xl shadow p-6 hover:shadow-lg transition-shadow group border border-orange-100"
+              >
+                <div className="flex items-center gap-4">
+                  <span className="text-3xl group-hover:scale-110 transition-transform">🏢</span>
+                  <div>
+                    <div className="font-semibold text-gray-800">关于我们</div>
+                    <div className="text-sm text-gray-500">了解优加油公司</div>
                   </div>
                 </div>
               </a>
