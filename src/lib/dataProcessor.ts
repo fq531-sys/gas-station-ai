@@ -84,9 +84,9 @@ export function calculateSalesOverview(orders: Order[]): SalesOverview {
       comparisonRate: { orders: 0, quantity: 0, amount: 0 },
       statistics: {
         dailyAvgByOilType: { '92#': 0, '95#': 0, '98#': 0, '0#': 0 },
-        avgOrderAmount: 0,
-        avgOrderQuantity: 0,
-        avgDiscountCost: 0,
+        avgOrderAmount: { gasoline: 0, diesel: 0, total: 0 },
+        avgOrderQuantity: { gasoline: 0, diesel: 0, total: 0 },
+        avgDiscountCost: { gasoline: 0, diesel: 0, total: 0 },
         totalDays: 0,
         dateRange: { start: new Date(), end: new Date() },
       },
@@ -94,7 +94,29 @@ export function calculateSalesOverview(orders: Order[]): SalesOverview {
     };
   }
 
-  const dates = orders.map(o => new Date(o.transactionTime));
+  const dates = orders.map(o => new Date(o.transactionTime)).filter(d => !isNaN(d.getTime()));
+  if (dates.length === 0) {
+    return {
+      totalOrders: 0,
+      totalQuantity: 0,
+      totalAmount: 0,
+      avgOrderAmount: 0,
+      dailyOrders: 0,
+      dailyQuantity: 0,
+      dailyAmount: 0,
+      dateRange: { start: new Date(), end: new Date() },
+      comparisonRate: { orders: 0, quantity: 0, amount: 0 },
+      statistics: {
+        dailyAvgByOilType: { '92#': 0, '95#': 0, '98#': 0, '0#': 0 },
+        avgOrderAmount: { gasoline: 0, diesel: 0, total: 0 },
+        avgOrderQuantity: { gasoline: 0, diesel: 0, total: 0 },
+        avgDiscountCost: { gasoline: 0, diesel: 0, total: 0 },
+        totalDays: 0,
+        dateRange: { start: new Date(), end: new Date() },
+      },
+      oilTypeDailySales: [],
+    };
+  }
   const startDate = new Date(Math.min(...dates.map(d => d.getTime())));
   const endDate = new Date(Math.max(...dates.map(d => d.getTime())));
   const days = Math.max(1, dayjs(endDate).diff(dayjs(startDate), 'day') + 1);
@@ -102,7 +124,19 @@ export function calculateSalesOverview(orders: Order[]): SalesOverview {
   const totalOrders = orders.length;
   const totalQuantity = orders.reduce((sum, o) => sum + o.quantity, 0);
   const totalAmount = orders.reduce((sum, o) => sum + o.actualAmount, 0);
-  const totalDiscount = orders.reduce((sum, o) => sum + (o.discountTotal || 0), 0);
+  const totalDiscount = orders.reduce((sum, o) => sum + ((o.orderAmount || 0) - (o.actualAmount || 0)), 0);
+
+  // 按油品分类统计
+  const gasolineOrders = orders.filter(o => ['92#', '95#', '98#'].includes(normalizeOilType(o.oilType)));
+  const dieselOrders = orders.filter(o => normalizeOilType(o.oilType) === '0#');
+
+  const gasolineQuantity = gasolineOrders.reduce((sum, o) => sum + o.quantity, 0);
+  const gasolineAmount = gasolineOrders.reduce((sum, o) => sum + o.actualAmount, 0);
+  const gasolineDiscount = gasolineOrders.reduce((sum, o) => sum + ((o.orderAmount || 0) - (o.actualAmount || 0)), 0);
+
+  const dieselQuantity = dieselOrders.reduce((sum, o) => sum + o.quantity, 0);
+  const dieselAmount = dieselOrders.reduce((sum, o) => sum + o.actualAmount, 0);
+  const dieselDiscount = dieselOrders.reduce((sum, o) => sum + ((o.orderAmount || 0) - (o.actualAmount || 0)), 0);
 
   // 计算按油品分组的日销量
   const oilTypeDailyMap = new Map<string, { '92#': number; '95#': number; '98#': number; '0#': number }>();
@@ -154,9 +188,21 @@ export function calculateSalesOverview(orders: Order[]): SalesOverview {
     comparisonRate: { orders: 0, quantity: 0, amount: 0 },
     statistics: {
       dailyAvgByOilType,
-      avgOrderAmount: totalOrders > 0 ? totalAmount / totalOrders : 0,
-      avgOrderQuantity: totalOrders > 0 ? totalQuantity / totalOrders : 0,
-      avgDiscountCost: totalQuantity > 0 ? totalDiscount / totalQuantity : 0, // 升油优惠成本 = 优惠总额 / 总升数
+      avgOrderAmount: {
+        gasoline: gasolineOrders.length > 0 ? gasolineAmount / gasolineOrders.length : 0,
+        diesel: dieselOrders.length > 0 ? dieselAmount / dieselOrders.length : 0,
+        total: totalOrders > 0 ? totalAmount / totalOrders : 0,
+      },
+      avgOrderQuantity: {
+        gasoline: gasolineOrders.length > 0 ? gasolineQuantity / gasolineOrders.length : 0,
+        diesel: dieselOrders.length > 0 ? dieselQuantity / dieselOrders.length : 0,
+        total: totalOrders > 0 ? totalQuantity / totalOrders : 0,
+      },
+      avgDiscountCost: {
+        gasoline: gasolineQuantity > 0 ? gasolineDiscount / gasolineQuantity : 0,
+        diesel: dieselQuantity > 0 ? dieselDiscount / dieselQuantity : 0,
+        total: totalQuantity > 0 ? totalDiscount / totalQuantity : 0,
+      },
       totalDays: days,
       dateRange: { start: startDate, end: endDate },
     },

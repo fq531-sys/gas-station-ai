@@ -43,12 +43,20 @@ export function aggregateCustomers(orders: Order[]): Customer[] {
     if (order.carPlate) existing.carPlate = order.carPlate;
 
     const orderDate = new Date(order.transactionTime);
+    // 调试：检查无效日期
+    if (isNaN(orderDate.getTime())) {
+      console.warn('无效日期:', order.transactionTime, '订单号:', order.orderId);
+    }
     if (orderDate > existing.lastOrderDate) {
       existing.lastOrderDate = orderDate;
     }
 
     customerMap.set(customerId, existing);
   });
+
+  // 调试：输出客户标识样本
+  const sampleCustomers = Array.from(customerMap.entries()).slice(0, 5);
+  console.log('客户标识样本:', sampleCustomers.map(([id, c]) => ({ id, phone: c.phone, memberCode: c.memberCode, orders: c.totalOrders })));
 
   return Array.from(customerMap.values()).map(c => ({
     customerId: c.customerId,
@@ -73,7 +81,8 @@ function extractCustomerId(order: Order): string {
   // 优先使用手机号（从各种可能的字段获取）
   const phone = orderAny.subCardPhone || orderAny.payUserPhone || orderAny.phone;
   if (phone && String(phone).trim() !== '') {
-    return String(phone).trim();
+    // 标准化手机号：去除所有非数字字符（处理 +86、86-、空格等格式）
+    return normalizePhoneNumber(String(phone).trim());
   }
 
   // 使用会员编码
@@ -84,10 +93,29 @@ function extractCustomerId(order: Order): string {
 
   // 如果都没有，使用车牌作为唯一标识（但同车牌可能多人使用，优先级最低）
   if (order.carPlate && order.carPlate.trim() !== '') {
-    return 'PLATE_' + order.carPlate.trim();
+    return 'PLATE_' + order.carPlate.trim().toUpperCase();
   }
 
   return '';
+}
+
+// 标准化手机号 - 去除所有非数字字符，并处理86前缀
+function normalizePhoneNumber(phone: string): string {
+  // 去除所有非数字字符
+  const digitsOnly = phone.replace(/\D/g, '');
+
+  // 如果是11位手机号，开头可能是86（国际格式）
+  if (digitsOnly.length === 11 && (digitsOnly.startsWith('86') || digitsOnly.startsWith('+86'))) {
+    // 返回标准格式（不带国家码）
+    return digitsOnly.slice(-11);
+  }
+
+  // 如果以86开头但长度不是11，直接返回（可能是固定电话或其他号码）
+  if (digitsOnly.startsWith('86') && digitsOnly.length !== 11) {
+    return digitsOnly;
+  }
+
+  return digitsOnly;
 }
 
 // 分类客户
@@ -131,11 +159,16 @@ export function classifyCustomers(customers: Customer[], orders: Order[], dataEn
       churn++;
       c.customerType = 'churn';
     } else {
-      // 其他的归类为流失风险客户（消费≥2次但天数<20的，或消费次数2但天数<20的）
+      // 消费2次但天数<20的客户
       risk++;
       c.customerType = 'risk';
     }
   });
+
+  // 调试：输出分类后的结果样本
+  const classifiedSample = customers.filter(c => c.totalOrders >= 3).slice(0, 3);
+  console.log('分类后样本(订单数>=3):', classifiedSample.map(c => ({ id: c.customerId, orders: c.totalOrders, type: c.customerType })));
+  console.log('分类统计: total=', total, 'base=', base, 'risk=', risk, 'churn=', churn, 'random=', random, 'financialRisk=', financialRisk);
 
   const calculatePercentage = (count: number) => total > 0 ? (count / total) * 100 : 0;
 
@@ -149,32 +182,20 @@ export function classifyCustomers(customers: Customer[], orders: Order[], dataEn
   ];
 }
 
-// 计算加油站平均升优惠力度（优惠总额 / 总升数）
+// 计算加油站平均升优惠力度（(订单金额-实付金额) / 总升数）
 function calculateStationAvgDiscountPerLiter(orders: Order[]): number {
   if (orders.length === 0) return 0;
-  const totalDiscount = orders.reduce((sum, o) => sum + (o.discountTotal || 0), 0);
+  const totalDiscount = orders.reduce((sum, o) => sum + ((o.orderAmount || 0) - (o.actualAmount || 0)), 0);
   const totalQuantity = orders.reduce((sum, o) => sum + o.quantity, 0);
   return totalQuantity > 0 ? totalDiscount / totalQuantity : 0;
 }
 
-// 计算单个客户的升优惠力度（优惠总额 / 总升数）
+// 计算单个客户的升优惠力度（(订单金额-实付金额) / 总升数）
 function calculateCustomerDiscountPerLiter(customerId: string, orders: Order[]): number {
-  const customerOrders = orders.filter(o => {
-    const orderAny = o as any;
-    const phone = orderAny.subCardPhone || orderAny.payUserPhone || orderAny.phone;
-    const memberCode = orderAny.memberCode;
-    const carPlate = o.carPlate;
-
-    let id = '';
-    if (phone) id = String(phone).trim();
-    else if (memberCode) id = String(memberCode).trim();
-    else if (carPlate) id = 'PLATE_' + String(carPlate).trim();
-
-    return id === customerId;
-  });
+  const customerOrders = orders.filter(o => extractCustomerId(o) === customerId);
 
   if (customerOrders.length === 0) return 0;
-  const totalDiscount = customerOrders.reduce((sum, o) => sum + (o.discountTotal || 0), 0);
+  const totalDiscount = customerOrders.reduce((sum, o) => sum + ((o.orderAmount || 0) - (o.actualAmount || 0)), 0);
   const totalQuantity = customerOrders.reduce((sum, o) => sum + o.quantity, 0);
   return totalQuantity > 0 ? totalDiscount / totalQuantity : 0;
 }
@@ -186,20 +207,7 @@ function detectFinancialRiskCustomers(orders: Order[], avgDiscountPerLiter: numb
   // 按客户分组
   const customerOrderMap = new Map<string, Order[]>();
   orders.forEach(order => {
-    const orderAny = order as any;
-    const phone = orderAny.subCardPhone || orderAny.payUserPhone || orderAny.phone;
-    const memberCode = orderAny.memberCode;
-    const carPlate = order.carPlate;
-
-    let customerId = '';
-    if (phone && String(phone).trim() !== '') {
-      customerId = String(phone).trim();
-    } else if (memberCode && String(memberCode).trim() !== '') {
-      customerId = String(memberCode).trim();
-    } else if (carPlate && String(carPlate).trim() !== '') {
-      customerId = 'PLATE_' + String(carPlate).trim();
-    }
-
+    const customerId = extractCustomerId(order);
     if (!customerId) return;
 
     if (!customerOrderMap.has(customerId)) {

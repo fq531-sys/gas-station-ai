@@ -7,6 +7,8 @@ import { CUSTOMER_TYPE_CONFIG } from '@/lib/constants';
 import dayjs from 'dayjs';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import LoginModal from '@/components/LoginModal';
+import AIChatBox from '@/components/AIChatBox';
+import AIAssistantPanel from '@/components/AIAssistantPanel';
 
 export default function Home() {
   const {
@@ -114,9 +116,10 @@ export default function Home() {
       gasoline: Math.round(w.gasoline / w.dayCount * 10) / 10,
       diesel: Math.round(w.diesel / w.dayCount * 10) / 10,
       total: Math.round((w.gasoline + w.diesel) / w.dayCount * 10) / 10,
+      gasolineTon: Math.round(w.gasoline / w.dayCount / 1350 * 100) / 100,
+      dieselTon: Math.round(w.diesel / w.dayCount / 1200 * 100) / 100,
+      totalTon: Math.round(w.gasoline / w.dayCount / 1350 * 100) / 100 + Math.round(w.diesel / w.dayCount / 1200 * 100) / 100,
     }));
-
-    // 按月分组
     const monthlyMap = new Map<string, { monthKey: string; month: string; '92#': number; '95#': number; '98#': number; '0#': number; gasoline: number; diesel: number; dayCount: number }>();
     data.forEach(d => {
       const date = dayjs(d.date);
@@ -146,40 +149,29 @@ export default function Home() {
       gasoline: Math.round(m.gasoline / m.dayCount * 10) / 10,
       diesel: Math.round(m.diesel / m.dayCount * 10) / 10,
       total: Math.round((m.gasoline + m.diesel) / m.dayCount * 10) / 10,
+      gasolineTon: Math.round(m.gasoline / m.dayCount / 1350 * 100) / 100,
+      dieselTon: Math.round(m.diesel / m.dayCount / 1200 * 100) / 100,
+      totalTon: Math.round(m.gasoline / m.dayCount / 1350 * 100) / 100 + Math.round(m.diesel / m.dayCount / 1200 * 100) / 100,
     }));
 
-    return { weekly: weeklyData, monthly: monthlyData };
+    return { weekly: weeklyData, monthly: monthlyData, yAxisMax: 0 };
   }, [salesOverview]);
+
+  // 计算Y轴最大值（向上取整到最接近的5的倍数，如果恰好是5的倍数则再加一个5）
+  const yAxisMax = useMemo(() => {
+    const allData = [...chartData.weekly, ...chartData.monthly];
+    if (allData.length === 0) return 50;
+    const maxTotal = Math.max(...allData.map(d => d.totalTon || 0));
+    const rounded = Math.ceil(maxTotal / 5) * 5;
+    if (rounded <= maxTotal) {
+      return rounded + 5;
+    }
+    return rounded;
+  }, [chartData]);
 
   // 导出客户表
   const exportCustomerTable = (type: string) => {
-    const paidTypes = ['churn', 'financialRisk'];
-
-    // 检查是否需要付费
-    if (paidTypes.includes(type)) {
-      // 先检查是否已登录
-      if (!isLoggedIn) {
-        // 设置登录成功后的回调
-        setLoginSuccessCallback(() => () => {
-          // 登录后直接执行导出（如果还没付费会继续弹出支付框）
-          doExportCustomerTable(type);
-        });
-        setShowLoginModal(true);
-        return;
-      }
-      // 检查权限
-      const permissionMap: Record<string, string> = {
-        churn: 'churn_export',
-        financialRisk: 'financial_risk_export',
-      };
-      if (!hasPermission(permissionMap[type])) {
-        setPendingExportType(type);
-        setShowPaywallModal(true);
-        return;
-      }
-    }
-
-    // 免费类型直接导出
+    // 免费类型直接导出（暂时隐藏付费功能）
     doExportCustomerTable(type);
   };
 
@@ -348,6 +340,10 @@ export default function Home() {
           <div className="flex items-center justify-end mb-4">
             {isLoggedIn ? (
               <div className="flex items-center gap-3 px-4 py-2 bg-white rounded-full shadow">
+                <a href="/member-center" className="text-sm text-blue-600 hover:text-blue-700 font-medium">
+                  👑 会员中心
+                </a>
+                <span className="text-gray-300">|</span>
                 <span className="text-sm text-gray-600">👤 {user?.phone}</span>
                 <span className={`text-xs px-2 py-1 rounded-full ${
                   user?.memberLevel === 'ultimate' ? 'bg-purple-100 text-purple-700' :
@@ -451,12 +447,146 @@ export default function Home() {
         ) : (
           /* 数据展示区域 */
           <div className="space-y-6">
+            {/* AI助手 + 智能分析摘要 并排 */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* 左侧：油站问题智能分析摘要 */}
+              <div className="lg:col-span-2 bg-white rounded-2xl shadow-lg p-6">
+                <h2 className="text-xl font-bold text-gray-800 mb-4">
+                  🔍 油站问题智能分析摘要
+                </h2>
+                <div className="p-4 bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl border border-amber-200">
+                  <p className="text-sm text-amber-800 leading-relaxed">
+                    ⚠️ <strong>仅根据数据分析得出，请结合油站实际情况判断，具体数据见下方数据概览</strong>
+                  </p>
+                  <div className="mt-3 space-y-2 text-sm text-gray-600">
+                    {salesOverview && customerSegments.length > 0 ? (
+                      <>
+                        {customerSegments.find(s => s.type === 'churn') && (
+                          <p>• 检测到 <span className="text-red-600 font-medium">{customerSegments.find(s => s.type === 'churn')?.count}</span> 位流失客户，建议及时开展召回活动</p>
+                        )}
+                        {customerSegments.find(s => s.type === 'risk') && (
+                          <p>• 有 <span className="text-orange-600 font-medium">{customerSegments.find(s => s.type === 'risk')?.count}</span> 位客户处于流失风险期，需重点关注</p>
+                        )}
+                        {customerSegments.find(s => s.type === 'financialRisk')?.count && customerSegments.find(s => s.type === 'financialRisk')!.count > 0 && (
+                          <p>• 发现 <span className="text-red-600 font-medium">{customerSegments.find(s => s.type === 'financialRisk')!.count}</span> 位客户存在财务风险，建议重点排查</p>
+                        )}
+                        {(salesOverview.statistics.avgOrderAmount.gasoline < 200 || salesOverview.statistics.avgOrderAmount.diesel < 200) && (
+                          <p>• 客单价偏低，建议优化营销策略提升单笔消费</p>
+                        )}
+                        {(salesOverview.statistics.avgDiscountCost.gasoline > 0.5 || salesOverview.statistics.avgDiscountCost.diesel > 0.5) && (
+                          <p>• 升油优惠成本偏高，建议优化优惠发放策略</p>
+                        )}
+                        {!customerSegments.find(s => s.type === 'churn') && !customerSegments.find(s => s.type === 'risk') && (!customerSegments.find(s => s.type === 'financialRisk') || customerSegments.find(s => s.type === 'financialRisk')!.count === 0) && (
+                          <p>• 数据整体表现良好，暂未检测到明显异常</p>
+                        )}
+                      </>
+                    ) : (
+                      <p>请先上传数据，系统将自动分析油站运营问题</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* 右侧：AI智能助手 */}
+              <div className="bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl shadow-lg p-6 text-white">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-2xl">🤖</span>
+                  <h2 className="text-lg font-bold">AI智能营销官</h2>
+                </div>
+                <p className="text-blue-100 text-sm mb-4">
+                  基于数据分析的智能顾问，帮你诊断油站问题、提供运营建议
+                </p>
+
+                {orders.length > 0 ? (
+                  <AIAssistantPanel />
+                ) : (
+                  <div className="bg-white/10 rounded-lg p-4 text-center">
+                    <div className="text-3xl mb-2">📊</div>
+                    <p className="text-sm text-blue-100">上传数据后体验AI分析</p>
+                  </div>
+                )}
+
+                <div className="mt-4 pt-4 border-t border-blue-400/30">
+                  <a
+                    href="/member-center"
+                    className="block w-full py-2 bg-white/20 hover:bg-white/30 rounded-lg text-center text-sm transition-colors"
+                  >
+                    升级会员解锁更多功能
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            {/* 客户构成 */}
+            <div className="bg-white rounded-2xl shadow-lg p-6">
+              <h3 className="text-lg font-bold text-gray-800 mb-4">👥 客户构成分析</h3>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                {customerSegments.map((segment) => (
+                  <div
+                    key={segment.type}
+                    className="p-4 rounded-xl text-center cursor-help relative"
+                    style={{ backgroundColor: segment.color + '15' }}
+                    title={CUSTOMER_TYPE_CONFIG[segment.type]?.description || ''}
+                  >
+                    <div
+                      className="w-12 h-12 rounded-full mx-auto mb-2 flex items-center justify-center text-white text-lg font-bold"
+                      style={{ backgroundColor: segment.color }}
+                    >
+                      {segment.count}
+                    </div>
+                    <div className="font-medium text-gray-700 text-sm">
+                      {segment.name}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {segment.percentage.toFixed(1)}%
+                    </div>
+                    {segment.type === 'base' && (
+                      <button
+                        onClick={() => exportCustomerTable('base')}
+                        title="下载客户列表，进行深度运营"
+                        className="mt-2 w-full px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium shadow-sm flex items-center justify-center gap-1"
+                      >
+                        <span className="text-lg">⬇</span> 深度运营
+                      </button>
+                    )}
+                    {(segment.type === 'risk' || segment.type === 'churn') && (
+                      <button
+                        onClick={() => exportCustomerTable(segment.type)}
+                        title="下载客户列表，进行客户召回"
+                        className="mt-2 w-full px-3 py-2 text-sm bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors font-medium shadow-sm flex items-center justify-center gap-1"
+                      >
+                        <span className="text-lg">⬇</span> 客户召回
+                      </button>
+                    )}
+                    {segment.type === 'financialRisk' && (
+                      <button
+                        onClick={() => exportCustomerTable('financialRisk')}
+                        title="下载客户列表，进行风险排查"
+                        className="mt-2 w-full px-3 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium shadow-sm flex items-center justify-center gap-1"
+                      >
+                        <span className="text-lg">⬇</span> 风险排查
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
             {/* 数据概览卡片 */}
             <div className="bg-white rounded-2xl shadow-lg p-6">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-bold text-gray-800">
-                  📊 数据概览
-                </h2>
+                <div className="flex items-center gap-3">
+                  <h2 className="text-xl font-bold text-gray-800">
+                    📊 数据概览
+                  </h2>
+                  {salesOverview?.statistics && (
+                    <div className="px-3 py-1 bg-gradient-to-br from-slate-100 to-slate-200 rounded-full text-center">
+                      <span className="text-xs text-slate-500">统计</span>
+                      <span className="text-sm font-bold text-slate-700 ml-1">{salesOverview.statistics.totalDays}</span>
+                      <span className="text-xs text-slate-500">天</span>
+                    </div>
+                  )}
+                </div>
                 <button
                   onClick={clearData}
                   className="text-sm text-gray-500 hover:text-red-500"
@@ -501,36 +631,66 @@ export default function Home() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                    <div className="p-4 bg-gray-50 rounded-xl text-center">
-                      <div className="text-sm text-gray-500 mb-1">客单价</div>
-                      <div className="text-2xl font-bold text-gray-700">
-                        ¥{salesOverview.statistics.avgOrderAmount.toFixed(0)}
+                  <div className="grid grid-cols-3 gap-4 mb-6">
+                    {/* 客单价 */}
+                    <div className="p-4 bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl shadow-sm">
+                      <div className="text-sm text-blue-600 font-medium mb-3 text-center">客单价</div>
+                      <div className="flex gap-2">
+                        <div className="flex-1 bg-white/60 p-2 rounded-lg text-center">
+                          <div className="text-xs text-blue-400 mb-1">汽油</div>
+                          <div className="text-xl font-bold text-blue-700">
+                            ¥{salesOverview.statistics.avgOrderAmount.gasoline.toFixed(0)}
+                          </div>
+                        </div>
+                        <div className="flex-1 bg-white/60 p-2 rounded-lg text-center">
+                          <div className="text-xs text-orange-500 mb-1">柴油</div>
+                          <div className="text-xl font-bold text-orange-700">
+                            ¥{salesOverview.statistics.avgOrderAmount.diesel.toFixed(0)}
+                          </div>
+                        </div>
                       </div>
                     </div>
-                    <div className="p-4 bg-gray-50 rounded-xl text-center">
-                      <div className="text-sm text-gray-500 mb-1">客单升</div>
-                      <div className="text-2xl font-bold text-gray-700">
-                        {salesOverview.statistics.avgOrderQuantity.toFixed(1)}升
+                    {/* 客单升 */}
+                    <div className="p-4 bg-gradient-to-br from-green-50 to-green-100 rounded-xl shadow-sm">
+                      <div className="text-sm text-green-600 font-medium mb-3 text-center">客单升</div>
+                      <div className="flex gap-2">
+                        <div className="flex-1 bg-white/60 p-2 rounded-lg text-center">
+                          <div className="text-xs text-blue-400 mb-1">汽油</div>
+                          <div className="text-xl font-bold text-green-700">
+                            {salesOverview.statistics.avgOrderQuantity.gasoline.toFixed(1)}升
+                          </div>
+                        </div>
+                        <div className="flex-1 bg-white/60 p-2 rounded-lg text-center">
+                          <div className="text-xs text-orange-500 mb-1">柴油</div>
+                          <div className="text-xl font-bold text-orange-700">
+                            {salesOverview.statistics.avgOrderQuantity.diesel.toFixed(1)}升
+                          </div>
+                        </div>
                       </div>
                     </div>
-                    <div className="p-4 bg-gray-50 rounded-xl text-center">
-                      <div className="text-sm text-gray-500 mb-1">升油优惠成本</div>
-                      <div className="text-2xl font-bold text-gray-700">
-                        ¥{salesOverview.statistics.avgDiscountCost.toFixed(2)}
-                      </div>
-                    </div>
-                    <div className="p-4 bg-gray-50 rounded-xl text-center">
-                      <div className="text-sm text-gray-500 mb-1">统计天数</div>
-                      <div className="text-2xl font-bold text-gray-700">
-                        {salesOverview.statistics.totalDays}天
+                    {/* 升优惠成本 */}
+                    <div className="p-4 bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl shadow-sm">
+                      <div className="text-sm text-purple-600 font-medium mb-3 text-center">升优惠成本</div>
+                      <div className="flex gap-2">
+                        <div className="flex-1 bg-white/60 p-2 rounded-lg text-center">
+                          <div className="text-xs text-blue-400 mb-1">汽油</div>
+                          <div className="text-xl font-bold text-purple-700">
+                            ¥{salesOverview.statistics.avgDiscountCost.gasoline.toFixed(2)}
+                          </div>
+                        </div>
+                        <div className="flex-1 bg-white/60 p-2 rounded-lg text-center">
+                          <div className="text-xs text-orange-500 mb-1">柴油</div>
+                          <div className="text-xl font-bold text-orange-700">
+                            ¥{salesOverview.statistics.avgDiscountCost.diesel.toFixed(2)}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
 
                   {/* 折线图切换 */}
                   <div className="flex items-center justify-between mb-4">
-                    <div className="flex gap-2">
+                    <div className="flex gap-3">
                       <button
                         onClick={() => setChartView('weekly')}
                         className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
@@ -555,7 +715,7 @@ export default function Home() {
 
                   {/* 日均销量折线图 */}
                   <div>
-                    <h4 className="text-sm font-medium text-gray-600 mb-3">日均销量（升）</h4>
+                    <h4 className="text-sm font-medium text-gray-600 mb-3">日均销量（吨）</h4>
                     <div className="h-72">
                       <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={chartView === 'weekly' ? chartData.weekly : chartData.monthly as any}>
@@ -565,85 +725,21 @@ export default function Home() {
                             tick={{ fontSize: 11 }}
                             tickLine={false}
                           />
-                          <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+                          <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={(value) => `${value}t`} domain={[0, yAxisMax]} />
                           <Tooltip
                             contentStyle={{ borderRadius: '8px', border: '1px solid #E5E7EB' }}
+                            formatter={(value) => [`${Number(value).toFixed(2)}吨`, '']}
                           />
                           <Legend />
-                          <Line type="monotone" dataKey="gasoline" name="汽油" stroke="#3B82F6" strokeWidth={2} dot={{ r: 3 }} />
-                          <Line type="monotone" dataKey="diesel" name="柴油" stroke="#F59E0B" strokeWidth={2} dot={{ r: 3 }} />
-                          <Line type="monotone" dataKey="total" name="总销量" stroke="#8B5CF6" strokeWidth={2} dot={{ r: 3 }} />
+                          <Line type="monotone" dataKey="gasolineTon" name="汽油" stroke="#3B82F6" strokeWidth={2} dot={{ r: 3 }} />
+                          <Line type="monotone" dataKey="dieselTon" name="柴油" stroke="#F59E0B" strokeWidth={2} dot={{ r: 3 }} />
+                          <Line type="monotone" dataKey="totalTon" name="总销量" stroke="#8B5CF6" strokeWidth={2} dot={{ r: 3 }} />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
                   </div>
                 </>
               )}
-            </div>
-
-            {/* 客户构成 */}
-            <div className="bg-white rounded-2xl shadow-lg p-6">
-              <h3 className="text-lg font-bold text-gray-800 mb-4">👥 客户构成分析</h3>
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                {customerSegments.map((segment) => (
-                  <div
-                    key={segment.type}
-                    className="p-4 rounded-xl text-center cursor-help relative"
-                    style={{ backgroundColor: segment.color + '15' }}
-                    title={CUSTOMER_TYPE_CONFIG[segment.type]?.description || ''}
-                  >
-                    <div
-                      className="w-12 h-12 rounded-full mx-auto mb-2 flex items-center justify-center text-white text-lg font-bold"
-                      style={{ backgroundColor: segment.color }}
-                    >
-                      {segment.count}
-                    </div>
-                    <div className="font-medium text-gray-700 text-sm">
-                      {segment.name}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      {segment.percentage.toFixed(1)}%
-                    </div>
-                    {segment.type === 'base' && (
-                      <button
-                        onClick={() => exportCustomerTable('base')}
-                        title="下载客户列表，进行深度运营"
-                        className="mt-2 w-full px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium shadow-sm flex items-center justify-center gap-1"
-                      >
-                        <span className="text-lg">⬇</span> 深度运营
-                      </button>
-                    )}
-                    {(segment.type === 'risk' || segment.type === 'churn') && (
-                      <button
-                        onClick={() => exportCustomerTable(segment.type)}
-                        title="下载客户列表，进行客户召回"
-                        className="mt-2 w-full px-3 py-2 text-sm bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors font-medium shadow-sm flex items-center justify-center gap-1"
-                      >
-                        <span className="text-lg">⬇</span> 客户召回
-                      </button>
-                    )}
-                    {segment.type === 'churn' && (
-                      <div className="text-xs text-orange-600 mt-1 font-medium">
-                        初级会员服务
-                      </div>
-                    )}
-                    {segment.type === 'financialRisk' && (
-                      <button
-                        onClick={() => exportCustomerTable('financialRisk')}
-                        title="下载客户列表，进行风险排查"
-                        className="mt-2 w-full px-3 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium shadow-sm flex items-center justify-center gap-1"
-                      >
-                        <span className="text-lg">⬇</span> 风险排查
-                      </button>
-                    )}
-                    {segment.type === 'financialRisk' && (
-                      <div className="text-xs text-red-600 mt-1 font-medium">
-                        初级会员服务
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
             </div>
 
             {/* 快捷操作 */}
@@ -781,6 +877,9 @@ export default function Home() {
               onClose={() => setShowLoginModal(false)}
               onLoginSuccess={handleLoginSuccess}
             />
+
+            {/* AI对话助手 */}
+            <AIChatBox />
           </div>
         )}
       </div>

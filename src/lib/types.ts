@@ -85,10 +85,10 @@ export interface StatisticsData {
     '98#': number;
     '0#': number;
   };
-  // 核心指标
-  avgOrderAmount: number; // 客单价
-  avgOrderQuantity: number; // 客单升
-  avgDiscountCost: number; // 升油优惠成本
+  // 核心指标（按油品类型拆分）
+  avgOrderAmount: { gasoline: number; diesel: number; total: number };
+  avgOrderQuantity: { gasoline: number; diesel: number; total: number };
+  avgDiscountCost: { gasoline: number; diesel: number; total: number };
   // 数据周期
   totalDays: number;
   dateRange: { start: Date; end: Date };
@@ -274,4 +274,23 @@ export interface StationCompareResult {
   advantages: { station: 1 | 2; metric: string; diff: number }[];
   disadvantages: { station: 1 | 2; metric: string; diff: number }[];
   overallWinner: 1 | 2 | 0;
+}
+
+// 分析记录
+export interface AnalysisRecord {
+  id: string;
+  createdAt: string;
+  fileName: string;
+  dataSummary: {
+    totalOrders: number;
+    totalQuantity: number;
+    totalAmount: number;
+    dateRange: { start: string; end: string };
+  };
+  // 保存完整数据用于回显
+  orders: Order[];
+  salesOverview: SalesOverview;
+  dailySales: DailySales[];
+  customerSegments: CustomerSegment[];
+  riskAlerts: RiskAlert[];
 }

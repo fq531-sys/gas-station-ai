@@ -1,6 +1,6 @@
 // 加油站AI智能营销官 - API客户端
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
 interface ApiResponse<T = any> {
   success: boolean;
@@ -83,7 +83,41 @@ class ApiClient {
     });
   }
 
-  // 登录/注册
+  // 注册（密码模式）
+  async register(phone: string, password: string) {
+    const result = await this.request<{ token: string; user: User }>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ phone, password }),
+    });
+
+    if (result.success && result.data) {
+      this.setToken(result.data.token);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('user', JSON.stringify(result.data.user));
+      }
+    }
+
+    return result;
+  }
+
+  // 登录（密码模式）
+  async loginWithPassword(phone: string, password: string) {
+    const result = await this.request<{ token: string; user: User }>('/api/auth/login-password', {
+      method: 'POST',
+      body: JSON.stringify({ phone, password }),
+    });
+
+    if (result.success && result.data) {
+      this.setToken(result.data.token);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('user', JSON.stringify(result.data.user));
+      }
+    }
+
+    return result;
+  }
+
+  // 登录/注册（验证码模式，已废弃）
   async login(phone: string, code: string) {
     const result = await this.request<{ token: string; user: User }>('/api/auth/login', {
       method: 'POST',

@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { useStore } from '@/lib/store';
+import { useChatStore } from '@/lib/chatStore';
 import { filterRecallCustomers, calculateChurnLevel } from '@/lib/customerClassifier';
 import { RecallFilter, RecallCustomer } from '@/lib/types';
 import { CHURN_LEVEL_CONFIG } from '@/lib/constants';
@@ -26,7 +27,8 @@ const DAYS_OPTIONS = [
 ];
 
 export default function RecallPage() {
-  const { hasData, customers } = useStore();
+  const { hasData, customers, isLoggedIn, hasPermission } = useStore();
+  const { sendMessage } = useChatStore();
 
   const [filter, setFilter] = useState<RecallFilter>({
     excludeRandomCustomer: true,
@@ -34,6 +36,8 @@ export default function RecallPage() {
 
   const [aiQuery, setAiQuery] = useState('');
   const [isAiProcessing, setIsAiProcessing] = useState(false);
+
+  const hasAI = isLoggedIn && hasPermission('ai_insights');
 
   // 筛选流失客户
   const recallCustomers = useMemo(() => {
@@ -127,19 +131,28 @@ export default function RecallPage() {
               className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
             <button
-              onClick={() => {
-                // TODO: 调用AI解析
+              onClick={async () => {
+                if (!aiQuery.trim()) return;
                 setIsAiProcessing(true);
-                setTimeout(() => setIsAiProcessing(false), 1000);
+                try {
+                  await sendMessage(aiQuery);
+                  setAiQuery('');
+                } finally {
+                  setIsAiProcessing(false);
+                }
               }}
-              disabled={isAiProcessing}
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              disabled={isAiProcessing || !aiQuery.trim() || !hasAI}
+              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isAiProcessing ? '解析中...' : 'AI解析'}
             </button>
           </div>
           <p className="mt-2 text-sm text-gray-500">
-            💡 提示：也可以手动设置筛选条件
+            {!hasAI ? (
+              <span>💡 <a href="/member-center" className="text-blue-600 hover:underline">升级会员</a>解锁AI智能筛选能力</span>
+            ) : (
+              <span>💡 提示：也可以手动设置筛选条件</span>
+            )}
           </p>
         </div>
 
